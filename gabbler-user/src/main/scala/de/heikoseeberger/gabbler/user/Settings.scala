@@ -17,6 +17,7 @@
 package de.heikoseeberger.gabbler.user
 
 import akka.actor.{ Actor, ExtendedActorSystem, Extension, ExtensionKey }
+import scala.concurrent.duration.FiniteDuration
 
 object Settings extends ExtensionKey[Settings]
 
@@ -27,6 +28,9 @@ final class Settings(system: ExtendedActorSystem) extends Extension {
     val address: String = config.getString("gabbler-user.user-api.address")
 
     val port: Int = config.getInt("gabbler-user.user-api.port")
+
+    val userRepositoryTimeout: FiniteDuration =
+      config.getDuration("gabbler-user.user-api.user-repository-timeout").asScala
   }
 
   private def config = system.settings.config

@@ -26,8 +26,19 @@ object UserApp {
 
     override val supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
-    private val userApi = context.actorOf(UserApi.props(settings.userApi.address, settings.userApi.port), UserApi.Name)
+    private val userRepository = context.actorOf(UserRepository.props, UserRepository.Name)
 
+    private val userApi = context.actorOf(
+      UserApi.props(
+        settings.userApi.address,
+        settings.userApi.port,
+        userRepository,
+        settings.userApi.userRepositoryTimeout
+      ),
+      UserApi.Name
+    )
+
+    context.watch(userRepository)
     context.watch(userApi)
 
     override def receive = {
