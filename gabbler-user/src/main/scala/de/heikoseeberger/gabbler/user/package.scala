@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-package de.heikoseeberger
+package de.heikoseeberger.gabbler
 
-package object gabbler {
+package object user {
 
   type Traversable[+A] = scala.collection.immutable.Traversable[A]
   type Iterable[+A] = scala.collection.immutable.Iterable[A]
