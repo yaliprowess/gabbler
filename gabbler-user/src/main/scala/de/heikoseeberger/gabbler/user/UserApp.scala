@@ -16,7 +16,10 @@
 
 package de.heikoseeberger.gabbler.user
 
+import akka.NotUsed
 import akka.actor.{ Actor, ActorLogging, ActorSystem, Props, SupervisorStrategy, Terminated }
+import akka.cluster.Cluster
+import akka.cluster.singleton.{ ClusterSingletonManager, ClusterSingletonManagerSettings, ClusterSingletonProxy, ClusterSingletonProxySettings }
 import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
 import akka.persistence.query.PersistenceQuery
 import scala.concurrent.Await
@@ -28,12 +31,25 @@ object UserApp {
 
     override val supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
-    private val userRepository = context.actorOf(
-      UserRepository.props(
-        PersistenceQuery(context.system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
-      ),
-      UserRepository.Name
-    )
+    private val userRepository = {
+      val userRepository = context.actorOf(
+        ClusterSingletonManager.props(
+          UserRepository.props(
+            PersistenceQuery(context.system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
+          ),
+          NotUsed,
+          ClusterSingletonManagerSettings(context.system)
+        ),
+        UserRepository.Name
+      )
+      context.actorOf(
+        ClusterSingletonProxy.props(
+          userRepository.path.elements.mkString("/", "/", ""),
+          ClusterSingletonProxySettings(context.system)
+        ),
+        s"${UserRepository.Name}-proxy"
+      )
+    }
 
     private val userApi = context.actorOf(
       UserApi.props(
@@ -57,7 +73,7 @@ object UserApp {
 
   def main(args: Array[String]): Unit = {
     implicit val system = ActorSystem("gabbler-user-system")
-    system.actorOf(Props(new Root), "root")
+    Cluster(system).registerOnMemberUp(system.actorOf(Props(new Root), "root"))
     Await.ready(system.whenTerminated, Duration.Inf)
   }
 }
