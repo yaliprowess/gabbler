@@ -16,7 +16,8 @@
 
 package de.heikoseeberger.gabbler.user
 
-import akka.actor.{ Actor, ActorLogging, Props }
+import akka.actor.{ ActorLogging, Props }
+import akka.persistence.PersistentActor
 
 object UserRepository {
 
@@ -36,12 +37,14 @@ object UserRepository {
   def props: Props = Props(new UserRepository)
 }
 
-final class UserRepository extends Actor with ActorLogging {
+final class UserRepository extends PersistentActor with ActorLogging {
   import UserRepository._
+
+  override val persistenceId = Name
 
   private var users = Map.empty[String, User]
 
-  override def receive = {
+  override def receiveCommand = {
     case GetUsers                                            => sender() ! Users(users.valuesIterator.to[Set])
     case AddUser(username, _, _) if users.contains(username) => sender() ! UsernameTaken(username)
     case AddUser(username, nickname, email)                  => handleAddUser(username, nickname, email)
@@ -49,16 +52,22 @@ final class UserRepository extends Actor with ActorLogging {
     case RemoveUser(username)                                => handleRemoveUser(username)
   }
 
-  private def handleAddUser(username: String, nickname: String, email: String) = {
-    val user = User(username, nickname, email)
-    users += username -> user
-    log.info(s"Added user with username $username")
-    sender() ! UserAdded(user)
+  override def receiveRecover = {
+    case UserAdded(user)       => users += user.username -> user
+    case UserRemoved(username) => users -= username
   }
 
-  private def handleRemoveUser(username: String) = {
-    users -= username
-    log.info(s"Removed user with username $username")
-    sender() ! UserRemoved(username)
-  }
+  private def handleAddUser(username: String, nickname: String, email: String) =
+    persist(UserAdded(User(username, nickname, email))) { userAdded =>
+      receiveRecover(userAdded)
+      log.info(s"Added user with username $username")
+      sender() ! userAdded
+    }
+
+  private def handleRemoveUser(username: String) =
+    persist(UserRemoved(username)) { userRemoved =>
+      receiveRecover(userRemoved)
+      log.info(s"Removed user with username $username")
+      sender() ! userRemoved
+    }
 }
