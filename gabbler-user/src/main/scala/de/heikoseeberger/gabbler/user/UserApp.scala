@@ -17,6 +17,8 @@
 package de.heikoseeberger.gabbler.user
 
 import akka.actor.{ Actor, ActorLogging, ActorSystem, Props, SupervisorStrategy, Terminated }
+import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
+import akka.persistence.query.PersistenceQuery
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
@@ -26,7 +28,12 @@ object UserApp {
 
     override val supervisorStrategy = SupervisorStrategy.stoppingStrategy
 
-    private val userRepository = context.actorOf(UserRepository.props, UserRepository.Name)
+    private val userRepository = context.actorOf(
+      UserRepository.props(
+        PersistenceQuery(context.system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
+      ),
+      UserRepository.Name
+    )
 
     private val userApi = context.actorOf(
       UserApi.props(

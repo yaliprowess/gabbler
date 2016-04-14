@@ -19,13 +19,18 @@ package de.heikoseeberger.gabbler.user
 import akka.actor.Status.Failure
 import akka.actor.{ Actor, ActorLogging, ActorRef, Props }
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.StatusCodes.{ Conflict, Created, NoContent, NotFound }
+import akka.http.scaladsl.model.StatusCodes.{ BadRequest, Conflict, Created, NoContent, NotFound }
+import akka.http.scaladsl.model.{ HttpEntity, HttpResponse }
 import akka.http.scaladsl.server.Directives
 import akka.pattern.{ ask, pipe }
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import de.heikoseeberger.akkahttpcirce.CirceSupport
+import de.heikoseeberger.akkasse.MediaTypes.`text/event-stream`
+import de.heikoseeberger.akkasse.headers.`Last-Event-ID`
+import de.heikoseeberger.akkasse.{ EventStreamMarshalling, ServerSentEvent }
 import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets.UTF_8
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.FiniteDuration
 
@@ -43,7 +48,7 @@ object UserApi {
     import io.circe.generic.auto._
 
     // format: OFF
-    pathPrefix("users") {
+    def users = pathPrefix("users") {
       path(Segment) { username =>
         delete {
           onSuccess(userRepository ? RemoveUser(username)) {
@@ -66,7 +71,38 @@ object UserApi {
         }
       }
     }
+
+    def userEvents = {
+      import EventStreamMarshalling._
+      import io.circe.syntax._
+      def userEventToServerSentEvent(userEvent: (Long, UserEvent)) = userEvent match {
+        case (seqNr, UserAdded(user))       => ServerSentEvent(user.asJson.noSpaces, "user-added", seqNr.toString)
+        case (seqNr, UserRemoved(username)) => ServerSentEvent(username, "user-removed", seqNr.toString)
+      }
+      path("user-events") {
+        get {
+          optionalHeaderValueByName(`Last-Event-ID`.name) { lastEventId =>
+            try {
+              val fromSeqNo = lastEventId.getOrElse("0").trim.toLong + 1
+              complete {
+                (userRepository ? GetUserEvents(fromSeqNo))
+                  .mapTo[UserEvents]
+                  .map(_.userEvents.map(userEventToServerSentEvent))
+              }
+            } catch {
+              case e: NumberFormatException =>
+                complete(HttpResponse(BadRequest, entity = HttpEntity(
+                  `text/event-stream`,
+                  "Integral number expected for Last-Event-ID header!".getBytes(UTF_8)
+                )))
+            }
+          }
+        }
+      }
+    }
     // format: ON
+
+    users ~ userEvents
   }
 }
 

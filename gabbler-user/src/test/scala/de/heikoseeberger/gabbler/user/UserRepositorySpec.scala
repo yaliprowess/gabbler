@@ -17,29 +17,36 @@
 package de.heikoseeberger.gabbler.user
 
 import akka.actor.ActorSystem
-import akka.testkit.TestProbe
+import akka.persistence.inmemory.query.journal.scaladsl.InMemoryReadJournal
+import akka.persistence.query.PersistenceQuery
+import akka.stream.ActorMaterializer
+import akka.testkit.{ TestDuration, TestProbe }
 import org.scalatest.{ BeforeAndAfterAll, Matchers, WordSpec }
 import scala.concurrent.Await
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{ Duration, DurationInt }
 
 class UserRepositorySpec extends WordSpec with Matchers with BeforeAndAfterAll {
   import UserRepository._
 
   private implicit val system = ActorSystem()
 
+  private implicit val mat = ActorMaterializer()
+
+  private val readJournal = PersistenceQuery(system).readJournalFor[InMemoryReadJournal](InMemoryReadJournal.Identifier)
+
   "UserRepository" should {
     "correctly handle adding and removing users" in {
       val sender = TestProbe(): TestProbe // TODO Remove type ascription once IntelliJ is intelligent enough!
       implicit val senderRef = sender.ref
 
-      val userRepository = system.actorOf(UserRepository.props)
+      val userRepository = system.actorOf(UserRepository.props(readJournal))
       userRepository ! GetUsers
       sender.expectMsg(Users(Set.empty))
 
       val user1 = User("user-1", "User One", "user1@gabbler.io")
       import user1._
       userRepository ! AddUser(username, nickname, email)
-      sender.expectMsg(UserAdded(user1))
+      val userAdded = sender.expectMsg(UserAdded(user1))
       userRepository ! GetUsers
       sender.expectMsg(Users(Set(user1)))
 
@@ -47,12 +54,23 @@ class UserRepositorySpec extends WordSpec with Matchers with BeforeAndAfterAll {
       sender.expectMsg(UsernameTaken(username))
 
       userRepository ! RemoveUser(username)
-      sender.expectMsg(UserRemoved(username))
+      val userRemoved = sender.expectMsg(UserRemoved(username))
       userRepository ! GetUsers
       sender.expectMsg(Users(Set.empty))
 
       userRepository ! RemoveUser(username)
       sender.expectMsg(UsernameUnknown(username))
+
+      userRepository ! GetUserEvents(0)
+      val userEvents = sender.expectMsgPF(hint = "source of user events") { case UserEvents(userEvents) => userEvents }
+      val userEventsResult = Await.result(
+        userEvents.take(2).runFold(Vector.empty[(Long, UserEvent)])(_ :+ _),
+        10.seconds.dilated
+      )
+      userEventsResult should contain inOrder (
+        (1, userAdded), // The first event has seqNo 1!
+        (2, userRemoved)
+      )
     }
   }
 
